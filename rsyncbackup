@@ -1,0 +1,141 @@
+#!/bin/bash
+# Time-stamp: <2012-09-30 05:41:04 tamara>
+#
+# rsyncbackup - use rsync to make a backup
+#
+# Author: Tamara Temple <tamara@tamaratemple.com>
+# Created: 2012-06-01
+# Copyright (c) 2012 Tamara Temple
+# License: GPLv3
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# 
+
+# Following advice given on http://www.sanitarium.net/golug/rsync_backups_2010.html, make a periodic backup of device
+
+# Backups are done using hard-linking, so that only the changes actually
+# are written to the new directory, thus saving space. If files are 
+# removed or moved from the source, they are appropriately reflected
+# in the new backup.
+
+RSYNC=$(which rsync)
+MV=$(which mv)
+
+while getopts 'dvs:t:e:o:' Option
+do
+    case $Option in
+	'd' )
+	    # DRY_RUN
+	    DRY_RUN='--dry-run'
+	    ;;
+	'v' )
+	    # VERBOSE
+	    VERBOSE='--verbose --progress --itemize-changes'
+	    ;;
+	's' )
+	    # SOURCE
+	    SOURCE=$OPTARG
+	    ;;
+	't' )
+	    # TARGET
+	    TARGET=$OPTARG
+	    ;;
+	'e' )
+	    # EXCLUDE FILE
+	    EXCLUDE=$OPTARG
+	    ;;
+	'o' )
+	    # extra options
+	    EXTRAOPTS=$OPTARG
+	    ;;
+    esac
+done
+
+# Defaults if not yet defined
+DRY_RUN=${DRY_RUN:-''}
+VERBOSE=${VERBOSE:-''}
+SOURCE=${SOURCE:-''}
+TARGET=${TARGET:-''}
+EXTRAOPTS=${EXTRAOPTS:-''}
+EXCLUDE=${EXCLUDE:-'/etc/local/rsyncbackup.excludes'}
+if [[ ! -z "$EXCLUDE" ]] ; then
+    EXCLUDE="--exclude-from=$EXCLUDE"
+fi
+# SOURCE and TARGET *must* be given on command line
+if [[ -z "$SOURCE" ]] ; then
+    echo "SOURCE must be given on command line: -s SOURCE"
+    exit -2
+fi
+if [[ -z "$TARGET" ]] ; then
+    echo "TARGET must be given on command line: -t TARGET"
+    exit -3
+fi
+
+
+# Check to see if there has been a previous backup by checking the .lastfull file in the target directory
+# If so, assign the contents of the .lastfull file
+# If not, assign null
+
+[ -e "$TARGET/.lastfull" ] && LINKDEST="--link-dest=$(cat "$TARGET/.lastfull")" || LINKDEST=""
+
+if [[ ! -z "$VERBOSE" ]] ; then
+    set -vx
+    echo DRY_RUN=$DRY_RUN
+    echo SOURCE=$SOURCE
+    echo TARGET=$TARGET
+    echo LINKDEST=$LINKDEST
+    echo EXCLUDE=$EXCLUDE
+    echo EXTRAOPTS=$EXTRAOPTS
+fi
+
+if [[ -d "$TARGET/.incomplete" ]]
+then
+    mv "$TARGET/.incomplete" "$TARGET/.incomplete.$(date "+%FT%H-%M-%S")"
+fi
+
+echo "Backing up $SOURCE to $TARGET"
+
+OPTS=" \
+    $VERBOSE \
+    $DRY_RUN \
+    --archive \
+    --one-file-system \
+    --hard-links \
+    --human-readable \
+    --inplace \
+    --numeric-ids \
+    --delete \
+    ${LINKDEST} ${EXCLUDE} ${EXTRAOPTS} \
+    ${SOURCE} ${TARGET}/.incomplete"
+
+if [[ ! -z "$VERBOSE" ]] ; then
+    echo Rsync options: $OPTS
+fi
+
+$RSYNC $OPTS
+
+if [[ ! $? ]]
+    then
+    echo 'rsync failed';
+    exit $?
+fi
+
+if [[ -d "$TARGET/.incomplete" ]]
+    then
+    NEW_DIR=$(date "+%FT%H-%M-%S")
+    $MV "$TARGET/.incomplete" "$TARGET/$NEW_DIR"
+    echo "$TARGET/$NEW_DIR" > "$TARGET/.lastfull"
+fi
+
+echo "Backup complete."
